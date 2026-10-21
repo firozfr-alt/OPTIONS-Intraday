@@ -5,7 +5,6 @@ import urllib.parse
 # -----------------------------------------
 # 1. UPSTOX API CONFIGURATION
 # -----------------------------------------
-# Ensure you have a .streamlit/secrets.toml file with these keys
 try:
     API_KEY = st.secrets["UPSTOX_API_KEY"]
     API_SECRET = st.secrets["UPSTOX_API_SECRET"]
@@ -49,10 +48,12 @@ def exchange_code_for_token(auth_code):
 # 3. MARKET DATA & OPTIONS LOGIC
 # -----------------------------------------
 def get_index_spot_price(access_token, index_name="Nifty 50"):
-    # Upstox Instrument Keys for Indices
+    # Upstox Instrument Keys for all major tradable liquid indices
     keys = {
         "Nifty 50": "NSE_INDEX|Nifty 50",
-        "Bank Nifty": "NSE_INDEX|Nifty Bank"
+        "Bank Nifty": "NSE_INDEX|Nifty Bank",
+        "FinNifty (Financials)": "NSE_INDEX|Nifty Fin Service",
+        "Midcap Nifty": "NSE_INDEX|NIFTY MID SELECT"
     }
     instrument_key = keys.get(index_name)
     
@@ -62,7 +63,6 @@ def get_index_spot_price(access_token, index_name="Nifty 50"):
         'Authorization': f'Bearer {access_token}'
     }
     
-    # Passing parameters this way ensures safe URL encoding for spaces and '|' symbols
     params = {
         'instrument_key': instrument_key
     }
@@ -72,8 +72,6 @@ def get_index_spot_price(access_token, index_name="Nifty 50"):
         
         if response.status_code == 200:
             data = response.json()
-            
-            # FIX: Upstox returns the JSON key with a colon instead of a pipe
             response_key = instrument_key.replace('|', ':')
             
             if 'data' in data and response_key in data['data']:
@@ -82,7 +80,6 @@ def get_index_spot_price(access_token, index_name="Nifty 50"):
                 st.error(f"⚠️ Unexpected Data Format from Upstox: {data}")
                 return None
         else:
-            # Explicitly print the Upstox rejection reason to the dashboard
             st.error(f"⚠️ API Rejection [{response.status_code}]: {response.text}")
             return None
             
@@ -90,9 +87,18 @@ def get_index_spot_price(access_token, index_name="Nifty 50"):
         st.error(f"⚠️ System Error during fetch: {str(e)}")
         return None
 
+def get_strike_interval(index_name):
+    # Dynamic interval mapping based on the chosen sector
+    intervals = {
+        "Nifty 50": 50,
+        "Bank Nifty": 100,
+        "FinNifty (Financials)": 50,
+        "Midcap Nifty": 25
+    }
+    return intervals.get(index_name, 50)
+
 def calculate_atm_strike(spot_price, index_name):
-    # Nifty strike intervals are 50, Bank Nifty are 100
-    interval = 50 if index_name == "Nifty 50" else 100
+    interval = get_strike_interval(index_name)
     return round(spot_price / interval) * interval
 
 # -----------------------------------------
@@ -100,11 +106,9 @@ def calculate_atm_strike(spot_price, index_name):
 # -----------------------------------------
 st.set_page_config(page_title="Upstox Options Terminal", page_icon="📈", layout="centered")
 
-# Initialize session state for the token
 if 'access_token' not in st.session_state:
     st.session_state['access_token'] = None
 
-# Step 1: Check for authorization code in the URL (Redirect from Upstox)
 query_params = st.query_params
 if 'code' in query_params and not st.session_state['access_token']:
     auth_code = query_params['code']
@@ -112,21 +116,16 @@ if 'code' in query_params and not st.session_state['access_token']:
         token = exchange_code_for_token(auth_code)
         if token:
             st.session_state['access_token'] = token
-            # Clear the URL parameters to keep it clean
             st.query_params.clear()
             st.rerun()
 
-# Step 2: Render Login Screen if not authenticated
 if not st.session_state['access_token']:
     st.title("🔐 Upstox API Login")
     st.write("You must authorize the application to fetch live options data.")
-    
-    # Uses native link_button to safely route to Upstox authentication
     login_url = get_login_url()
     st.link_button("Login with Upstox", login_url, type="primary")
     st.stop()
 
-# Step 3: Render Main Options Dashboard if authenticated
 st.title("🎯 Intraday Options Setup Scanner")
 st.success("✅ Successfully connected to Upstox API")
 
@@ -138,10 +137,20 @@ st.divider()
 
 col1, col2 = st.columns(2)
 with col1:
-    selected_index = st.radio("Select Index", ["Nifty 50", "Bank Nifty"])
+    selected_index = st.radio(
+        "Select Index Sector", 
+        ["Nifty 50", "Bank Nifty", "FinNifty (Financials)", "Midcap Nifty"]
+    )
 
 with col2:
-    strategy_type = st.selectbox("Select Intraday Strategy", ["Delta-Neutral (Short Straddle)", "Directional (Long Call/Put)"])
+    strategy_type = st.selectbox(
+        "Select Intraday Strategy", 
+        [
+            "Delta-Neutral (Short Straddle)", 
+            "Directional (Long Call/Put)", 
+            "Delta Blast (Momentum Breakout)"
+        ]
+    )
 
 if st.button("Fetch Live Setup"):
     with st.spinner(f"Fetching live spot price for {selected_index}..."):
@@ -149,6 +158,7 @@ if st.button("Fetch Live Setup"):
         
         if spot_price:
             atm_strike = calculate_atm_strike(spot_price, selected_index)
+            interval = get_strike_interval(selected_index)
             
             st.metric(label=f"{selected_index} Spot Price", value=f"₹{spot_price:,.2f}")
             st.info(f"**Current ATM Strike:** {atm_strike}")
@@ -165,5 +175,12 @@ if st.button("Fetch Live Setup"):
                 st.write("Buy the ATM option based on your intraday trend analysis.")
                 st.markdown(f"- **If Bullish:** BUY {atm_strike} CE")
                 st.markdown(f"- **If Bearish:** BUY {atm_strike} PE")
+
+            elif strategy_type == "Delta Blast (Momentum Breakout)":
+                st.write("Explosive momentum strategy. Buy At-The-Money (ATM) or slightly Out-of-the-Money (OTM) options during a high-volume price breakout to capture rapid Delta expansion.")
+                st.markdown(f"- **If Upside Breakout:** BUY {atm_strike} CE or {atm_strike + interval} CE (for higher leverage)")
+                st.markdown(f"- **If Downside Breakout:** BUY {atm_strike} PE or {atm_strike - interval} PE (for higher leverage)")
+                st.error("🚨 **Delta Blast Rule:** This requires immediate execution and extreme momentum. If the breakout stalls for more than 2-3 candles, exit the trade immediately to avoid Theta decay.")
+                
         else:
             st.error("Failed to fetch market quote. Please check your API limits or token validity.")
