@@ -56,20 +56,35 @@ def get_index_spot_price(access_token, index_name="Nifty 50"):
     }
     instrument_key = keys.get(index_name)
     
-    url = f"https://api.upstox.com/v2/market-quote/quotes?instrument_key={instrument_key}"
+    url = "https://api.upstox.com/v2/market-quote/quotes"
     headers = {
         'Accept': 'application/json',
         'Authorization': f'Bearer {access_token}'
     }
     
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        data = response.json()
-        try:
-            return data['data'][instrument_key]['last_price']
-        except KeyError:
+    # Passing parameters this way ensures safe URL encoding for spaces and '|' symbols
+    params = {
+        'instrument_key': instrument_key
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if 'data' in data and instrument_key in data['data']:
+                return data['data'][instrument_key]['last_price']
+            else:
+                st.error(f"⚠️ Unexpected Data Format from Upstox: {data}")
+                return None
+        else:
+            # Explicitly print the Upstox rejection reason to the dashboard
+            st.error(f"⚠️ API Rejection [{response.status_code}]: {response.text}")
             return None
-    return None
+            
+    except Exception as e:
+        st.error(f"⚠️ System Error during fetch: {str(e)}")
+        return None
 
 def calculate_atm_strike(spot_price, index_name):
     # Nifty strike intervals are 50, Bank Nifty are 100
@@ -102,7 +117,7 @@ if not st.session_state['access_token']:
     st.title("🔐 Upstox API Login")
     st.write("You must authorize the application to fetch live options data.")
     
-    # FIX APPLIED HERE: Replaced st.markdown HTML with native st.link_button
+    # Uses native link_button to safely route to Upstox authentication
     login_url = get_login_url()
     st.link_button("Login with Upstox", login_url, type="primary")
     st.stop()
@@ -146,5 +161,3 @@ if st.button("Fetch Live Setup"):
                 st.write("Buy the ATM option based on your intraday trend analysis.")
                 st.markdown(f"- **If Bullish:** BUY {atm_strike} CE")
                 st.markdown(f"- **If Bearish:** BUY {atm_strike} PE")
-        else:
-            st.error("Failed to fetch market quote. Please check your API limits or token validity.")
