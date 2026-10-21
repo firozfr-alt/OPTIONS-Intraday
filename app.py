@@ -72,8 +72,12 @@ def get_index_spot_price(access_token, index_name="Nifty 50"):
         
         if response.status_code == 200:
             data = response.json()
-            if 'data' in data and instrument_key in data['data']:
-                return data['data'][instrument_key]['last_price']
+            
+            # FIX: Upstox returns the JSON key with a colon instead of a pipe
+            response_key = instrument_key.replace('|', ':')
+            
+            if 'data' in data and response_key in data['data']:
+                return data['data'][response_key]['last_price']
             else:
                 st.error(f"⚠️ Unexpected Data Format from Upstox: {data}")
                 return None
@@ -161,3 +165,5 @@ if st.button("Fetch Live Setup"):
                 st.write("Buy the ATM option based on your intraday trend analysis.")
                 st.markdown(f"- **If Bullish:** BUY {atm_strike} CE")
                 st.markdown(f"- **If Bearish:** BUY {atm_strike} PE")
+        else:
+            st.error("Failed to fetch market quote. Please check your API limits or token validity.")
