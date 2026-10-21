@@ -101,8 +101,10 @@ if 'code' in query_params and not st.session_state['access_token']:
 if not st.session_state['access_token']:
     st.title("🔐 Upstox API Login")
     st.write("You must authorize the application to fetch live options data.")
+    
+    # FIX APPLIED HERE: Replaced st.markdown HTML with native st.link_button
     login_url = get_login_url()
-    st.markdown(f'<a href="{login_url}" target="_self"><button style="background-color:#4CAF50; color:white; padding:10px 24px; border:none; border-radius:4px; cursor:pointer; font-size:16px;">Login with Upstox</button></a>', unsafe_allow_html=True)
+    st.link_button("Login with Upstox", login_url, type="primary")
     st.stop()
 
 # Step 3: Render Main Options Dashboard if authenticated
