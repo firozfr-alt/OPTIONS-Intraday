@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import urllib.parse
+import pandas as pd
 
 # -----------------------------------------
 # 1. UPSTOX API CONFIGURATION
@@ -48,7 +49,6 @@ def exchange_code_for_token(auth_code):
 # 3. MARKET DATA & OPTIONS LOGIC
 # -----------------------------------------
 def get_index_spot_price(access_token, index_name="Nifty 50"):
-    # Upstox Instrument Keys for all major tradable liquid indices
     keys = {
         "Nifty 50": "NSE_INDEX|Nifty 50",
         "Bank Nifty": "NSE_INDEX|Nifty Bank",
@@ -56,39 +56,25 @@ def get_index_spot_price(access_token, index_name="Nifty 50"):
         "Midcap Nifty": "NSE_INDEX|NIFTY MID SELECT"
     }
     instrument_key = keys.get(index_name)
-    
     url = "https://api.upstox.com/v2/market-quote/quotes"
     headers = {
         'Accept': 'application/json',
         'Authorization': f'Bearer {access_token}'
     }
-    
-    params = {
-        'instrument_key': instrument_key
-    }
+    params = {'instrument_key': instrument_key}
     
     try:
         response = requests.get(url, headers=headers, params=params)
-        
         if response.status_code == 200:
             data = response.json()
             response_key = instrument_key.replace('|', ':')
-            
             if 'data' in data and response_key in data['data']:
                 return data['data'][response_key]['last_price']
-            else:
-                st.error(f"⚠️ Unexpected Data Format from Upstox: {data}")
-                return None
-        else:
-            st.error(f"⚠️ API Rejection [{response.status_code}]: {response.text}")
-            return None
-            
-    except Exception as e:
-        st.error(f"⚠️ System Error during fetch: {str(e)}")
+        return None
+    except Exception:
         return None
 
 def get_strike_interval(index_name):
-    # Dynamic interval mapping based on the chosen sector
     intervals = {
         "Nifty 50": 50,
         "Bank Nifty": 100,
@@ -101,10 +87,25 @@ def calculate_atm_strike(spot_price, index_name):
     interval = get_strike_interval(index_name)
     return round(spot_price / interval) * interval
 
+def generate_option_chain_ladder(atm_strike, interval):
+    """Generates the ITM, ATM, and OTM strikes for CE and PE"""
+    return {
+        "CE": {
+            "ITM (+1)": atm_strike - interval,
+            "ATM": atm_strike,
+            "OTM (+1)": atm_strike + interval
+        },
+        "PE": {
+            "ITM (+1)": atm_strike + interval,
+            "ATM": atm_strike,
+            "OTM (+1)": atm_strike - interval
+        }
+    }
+
 # -----------------------------------------
 # 4. STREAMLIT UI DASHBOARD
 # -----------------------------------------
-st.set_page_config(page_title="Upstox Options Terminal", page_icon="📈", layout="centered")
+st.set_page_config(page_title="Upstox Options Terminal", page_icon="📈", layout="wide")
 
 if 'access_token' not in st.session_state:
     st.session_state['access_token'] = None
@@ -121,66 +122,66 @@ if 'code' in query_params and not st.session_state['access_token']:
 
 if not st.session_state['access_token']:
     st.title("🔐 Upstox API Login")
-    st.write("You must authorize the application to fetch live options data.")
-    login_url = get_login_url()
-    st.link_button("Login with Upstox", login_url, type="primary")
+    st.write("Authorize the application to fetch live options data.")
+    st.link_button("Login with Upstox", get_login_url(), type="primary")
     st.stop()
 
 st.title("🎯 Intraday Options Setup Scanner")
-st.success("✅ Successfully connected to Upstox API")
-
-if st.button("Log Out"):
-    st.session_state['access_token'] = None
-    st.rerun()
-
-st.divider()
+st.success("✅ Connected to Upstox API")
 
 col1, col2 = st.columns(2)
 with col1:
-    selected_index = st.radio(
-        "Select Index Sector", 
-        ["Nifty 50", "Bank Nifty", "FinNifty (Financials)", "Midcap Nifty"]
-    )
-
+    selected_index = st.radio("Select Index Sector", ["Nifty 50", "Bank Nifty", "FinNifty (Financials)", "Midcap Nifty"])
 with col2:
-    strategy_type = st.selectbox(
-        "Select Intraday Strategy", 
-        [
-            "Delta-Neutral (Short Straddle)", 
-            "Directional (Long Call/Put)", 
-            "Delta Blast (Momentum Breakout)"
-        ]
-    )
+    strategy_type = st.selectbox("Select Intraday Strategy", [
+        "Delta-Neutral (Short Straddle)", 
+        "Directional (Long Call/Put)", 
+        "Delta Blast (Momentum Breakout)"
+    ])
 
-if st.button("Fetch Live Setup"):
+if st.button("Fetch Live Setup", type="primary"):
     with st.spinner(f"Fetching live spot price for {selected_index}..."):
         spot_price = get_index_spot_price(st.session_state['access_token'], selected_index)
         
         if spot_price:
-            atm_strike = calculate_atm_strike(spot_price, selected_index)
             interval = get_strike_interval(selected_index)
+            atm_strike = calculate_atm_strike(spot_price, selected_index)
+            ladder = generate_option_chain_ladder(atm_strike, interval)
             
             st.metric(label=f"{selected_index} Spot Price", value=f"₹{spot_price:,.2f}")
-            st.info(f"**Current ATM Strike:** {atm_strike}")
             
-            st.subheader("Actionable Options Setup")
+            # --- DISPLAY STRIKE LADDER ---
+            st.subheader("📊 Options Strike Map")
+            
+            df_chain = pd.DataFrame({
+                "Moneyness": ["ITM (+1)", "ATM", "OTM (+1)"],
+                "Call (CE) Strike": [ladder["CE"]["ITM (+1)"], ladder["CE"]["ATM"], ladder["CE"]["OTM (+1)"]],
+                "Put (PE) Strike": [ladder["PE"]["ITM (+1)"], ladder["PE"]["ATM"], ladder["PE"]["OTM (+1)"]]
+            })
+            st.dataframe(df_chain, hide_index=True, use_container_width=True)
+
+            # --- STRATEGY EXECUTION ---
+            st.subheader("⚡ Actionable Strategy Execution")
             
             if strategy_type == "Delta-Neutral (Short Straddle)":
-                st.write("Sell the ATM Call and ATM Put simultaneously to capture premium decay (Theta) in a sideways market.")
-                st.markdown(f"- **SELL:** {atm_strike} CE")
-                st.markdown(f"- **SELL:** {atm_strike} PE")
-                st.warning("Ensure strict stop-losses on both legs to protect against sudden intraday spikes.")
+                st.write("Sell the ATM Call and ATM Put simultaneously to capture premium decay (Theta).")
+                st.markdown(f"- **SELL:** {ladder['CE']['ATM']} CE")
+                st.markdown(f"- **SELL:** {ladder['PE']['ATM']} PE")
                 
             elif strategy_type == "Directional (Long Call/Put)":
-                st.write("Buy the ATM option based on your intraday trend analysis.")
-                st.markdown(f"- **If Bullish:** BUY {atm_strike} CE")
-                st.markdown(f"- **If Bearish:** BUY {atm_strike} PE")
+                st.write("Buy options based on trend. Use ITM for higher delta, OTM for lower capital.")
+                st.markdown(f"**Bullish Setup:**")
+                st.markdown(f"- Aggressive (High Delta): BUY {ladder['CE']['ITM (+1)']} CE (ITM)")
+                st.markdown(f"- Balanced: BUY {ladder['CE']['ATM']} CE (ATM)")
+                st.markdown(f"**Bearish Setup:**")
+                st.markdown(f"- Aggressive (High Delta): BUY {ladder['PE']['ITM (+1)']} PE (ITM)")
+                st.markdown(f"- Balanced: BUY {ladder['PE']['ATM']} PE (ATM)")
 
             elif strategy_type == "Delta Blast (Momentum Breakout)":
-                st.write("Explosive momentum strategy. Buy At-The-Money (ATM) or slightly Out-of-the-Money (OTM) options during a high-volume price breakout to capture rapid Delta expansion.")
-                st.markdown(f"- **If Upside Breakout:** BUY {atm_strike} CE or {atm_strike + interval} CE (for higher leverage)")
-                st.markdown(f"- **If Downside Breakout:** BUY {atm_strike} PE or {atm_strike - interval} PE (for higher leverage)")
-                st.error("🚨 **Delta Blast Rule:** This requires immediate execution and extreme momentum. If the breakout stalls for more than 2-3 candles, exit the trade immediately to avoid Theta decay.")
+                st.write("Explosive momentum strategy. Buy during high-volume price breakouts.")
+                st.markdown(f"- **Upside Breakout:** BUY {ladder['CE']['ATM']} CE or {ladder['CE']['OTM (+1)']} CE")
+                st.markdown(f"- **Downside Breakout:** BUY {ladder['PE']['ATM']} PE or {ladder['PE']['OTM (+1)']} PE")
+                st.error("🚨 Exit if the breakout stalls for more than 2-3 candles to avoid Theta decay.")
                 
         else:
-            st.error("Failed to fetch market quote. Please check your API limits or token validity.")
+            st.error("Failed to fetch market quote. Check API limits or token validity.")
